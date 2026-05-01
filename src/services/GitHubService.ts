@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Schedule, Schema, Stream } from "effect"
 import * as Option from "effect/Option"
 import { config } from "../config.js"
 import {
@@ -72,6 +72,9 @@ const REVIEW_EVENT_CLI_FLAG = {
 	APPROVE: "--approve",
 	REQUEST_CHANGES: "--request-changes",
 } as const satisfies Record<SubmitPullRequestReviewInput["event"], string>
+
+const PAGE_FETCH_RETRIES = 4
+const pageRetrySchedule = Schedule.exponential("400 millis", 2)
 
 export class GitHubService extends Context.Service<
 	GitHubService,
@@ -189,14 +192,16 @@ export class GitHubService extends Context.Service<
 			const listPullRequestPage = Effect.fn("GitHubService.listPullRequestPage")(function* (input: ItemListInput<"pullRequest">) {
 				const pageSize = Math.max(1, Math.min(100, input.pageSize))
 				if (input.mode === "all" && input.repository !== null) {
-					return yield* listRepositoryPullRequestPage({ repository: input.repository, cursor: input.cursor, pageSize })
+					return yield* listRepositoryPullRequestPage({ repository: input.repository, cursor: input.cursor, pageSize }).pipe(
+						Effect.retry({ times: PAGE_FETCH_RETRIES, schedule: pageRetrySchedule }),
+					)
 				}
-				return yield* listPullRequestSearchPage({ ...input, pageSize })
+				return yield* listPullRequestSearchPage({ ...input, pageSize }).pipe(Effect.retry({ times: PAGE_FETCH_RETRIES, schedule: pageRetrySchedule }))
 			})
 
 			const listIssuePage = Effect.fn("GitHubService.listIssuePage")(function* (input: ItemListInput<"issue">) {
 				const pageSize = Math.max(1, Math.min(100, input.pageSize))
-				return yield* listIssueSearchPage({ ...input, pageSize })
+				return yield* listIssueSearchPage({ ...input, pageSize }).pipe(Effect.retry({ times: PAGE_FETCH_RETRIES, schedule: pageRetrySchedule }))
 			})
 
 			// Drain every page for an item query into a single array, using
